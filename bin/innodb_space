@@ -458,6 +458,7 @@ def space_index_pages_free_plot(space, image, start_page)
   end
 
   image_file = image + "_free.png"
+
   # Aim for one horizontal pixel per extent, but min 1k and max 10k width.
   image_width = [10000, [1000, space.pages / space.pages_per_extent].max].min
 
@@ -1813,8 +1814,8 @@ when "space-summary"
   space_summary(space, @options.page || 0)
 when "space-index-pages-summary"
   space_index_pages_summary(space, @options.page || 0)
-when "space-index-pages-free-plot"
-  name = File.basename(@options.space_file).sub(".ibd", "")
+  when "space-index-pages-free-plot"
+  name = File.basename(@options.space_file.first.to_s).sub(".ibd", "")
   space_index_pages_free_plot(space, name, @options.page || 0)
 when "space-page-type-regions"
   space_page_type_regions(space, @options.page || 0)
