@@ -1,47 +1,49 @@
-# -*- encoding : utf-8 -*-
+# frozen_string_literal: true
 
-class Innodb::Page::IbufBitmap < Innodb::Page
-  extend ReadBitsAtOffset
+module Innodb
+  class Page
+    class IbufBitmap < Page
+      extend ReadBitsAtOffset
 
-  def pos_ibuf_bitmap
-    pos_page_body
-  end
+      specialization_for :IBUF_BITMAP
 
-  def size_ibuf_bitmap
-    (Innodb::IbufBitmap::BITS_PER_PAGE * space.pages_per_bookkeeping_page) / 8
-  end
+      def pos_ibuf_bitmap
+        pos_page_body
+      end
 
-  def ibuf_bitmap
-    Innodb::IbufBitmap.new(self, cursor(pos_ibuf_bitmap))
-  end
+      def size_ibuf_bitmap
+        (Innodb::IbufBitmap::BITS_PER_PAGE * space.pages_per_bookkeeping_page) / 8
+      end
 
-  def each_region
-    unless block_given?
-      return enum_for(:each_region)
-    end
+      def ibuf_bitmap
+        Innodb::IbufBitmap.new(self, cursor(pos_ibuf_bitmap))
+      end
 
-    super do |region|
-      yield region
-    end
+      def each_region
+        return enum_for(:each_region) unless block_given?
 
-    yield({
-      :offset => pos_ibuf_bitmap,
-      :length => size_ibuf_bitmap,
-      :name => :ibuf_bitmap,
-      :info => "Insert Buffer Bitmap",
-    })
+        super do |region|
+          yield region
+        end
 
-    nil
-  end
+        yield Region.new(
+          offset: pos_ibuf_bitmap,
+          length: size_ibuf_bitmap,
+          name: :ibuf_bitmap,
+          info: 'Insert Buffer Bitmap'
+        )
 
-  def dump
-    super
+        nil
+      end
 
-    puts "ibuf bitmap:"
-    ibuf_bitmap.each_page_status do |page_number, page_status|
-      puts "  Page %i: %s" % [page_number, page_status.inspect]
+      def dump
+        super
+
+        puts 'ibuf bitmap:'
+        ibuf_bitmap.each_page_status do |page_number, page_status|
+          puts '  Page %i: %s' % [page_number, page_status.inspect]
+        end
+      end
     end
   end
 end
-
-Innodb::Page::SPECIALIZED_CLASSES[:IBUF_BITMAP] = Innodb::Page::IbufBitmap

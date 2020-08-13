@@ -1,5 +1,5 @@
-# -*- encoding : utf-8 -*-
+# frozen_string_literal: true
 
 module Innodb
-  VERSION = "0.9.15"
+  VERSION = '0.10.1'
 end
