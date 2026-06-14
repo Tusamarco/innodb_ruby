@@ -18,51 +18,43 @@ module Innodb
       end
 
       def blob_header
-        cursor(pos_blob_header).name('blob_header') do |c|
+        cursor(pos_blob_header).name("blob_header") do |c|
           {
-            length: c.name('length') { c.read_uint32 },
-            next: c.name('next') { Innodb::Page.maybe_undefined(c.read_uint32) },
+            length: c.name("length") { c.read_uint32 },
+            next: c.name("next") { Innodb::Page.maybe_undefined(c.read_uint32) },
           }
         end
       end
 
       def blob_data
-        cursor(pos_blob_data).name('blob_data') do |c|
+        cursor(pos_blob_data).name("blob_data") do |c|
           c.read_bytes(blob_header[:length])
         end
       end
 
-      def dump_hex(string)
-        slice_size = 16
-        string.split('').each_slice(slice_size).each_with_index do |slice_bytes, slice_count|
-          puts '%08i  %-23s  %-23s  |%-16s|' % [
-            (slice_count * slice_size),
-            slice_bytes[0..8].map { |n| '%02x' % n.ord }.join(' '),
-            slice_bytes[8..16].map { |n| '%02x' % n.ord }.join(' '),
-            slice_bytes.join(''),
-          ]
-        end
+      def next_blob_page
+        return unless blob_header[:next]
+
+        space.page(blob_header[:next])
       end
 
-      def each_region
+      def each_region(&block)
         return enum_for(:each_region) unless block_given?
 
-        super do |region|
-          yield region
-        end
+        super
 
         yield Region.new(
           offset: pos_blob_header,
           length: size_blob_header,
           name: :blob_header,
-          info: 'Blob Header'
+          info: "Blob Header"
         )
 
         yield Region.new(
           offset: pos_blob_data,
           length: blob_header[:length],
           name: :blob_data,
-          info: 'Blob Data'
+          info: "Blob Data"
         )
 
         nil
@@ -72,12 +64,12 @@ module Innodb
       def dump
         super
 
-        puts 'blob header:'
+        puts "blob header:"
         pp blob_header
         puts
 
-        puts 'blob data:'
-        dump_hex(blob_data)
+        puts "blob data:"
+        HexFormat.puts(blob_data)
         puts
 
         puts

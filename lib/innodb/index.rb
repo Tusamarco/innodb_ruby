@@ -21,7 +21,9 @@ module Innodb
       raise "Page #{root_page_number} couldn't be read" unless @root
 
       # The root page should be an index page.
-      raise "Page #{root_page_number} is a #{@root.type} page, not an INDEX page" unless @root.type == :INDEX
+      unless @root.is_a?(Innodb::Page::Index)
+        raise "Page #{root_page_number} is a #{@root.type} page, not an INDEX page"
+      end
 
       # The root page should be the only page at its level.
       raise "Page #{root_page_number} does not appear to be an index root" if @root.prev || @root.next
@@ -53,12 +55,12 @@ module Innodb
 
     # Internal method used by recurse.
     def _recurse(parent_page, page_proc, link_proc, depth = 0)
-      page_proc.call(parent_page, depth) if page_proc && parent_page.type == :INDEX
+      page_proc.call(parent_page, depth) if page_proc && parent_page.is_a?(Innodb::Page::Index)
 
       parent_page.each_child_page do |child_page_number, child_min_key|
         child_page = page(child_page_number)
         child_page.record_describer = record_describer
-        next unless child_page.type == :INDEX
+        next unless child_page.is_a?(Innodb::Page::Index)
 
         link_proc&.call(parent_page, child_page, child_min_key, depth + 1)
         _recurse(child_page, page_proc, link_proc, depth + 1)
@@ -124,12 +126,10 @@ module Innodb
     end
 
     # Iterate through all lists in a given fseg.
-    def each_fseg_list(fseg)
+    def each_fseg_list(fseg, &block)
       return enum_for(:each_fseg_list, fseg) unless block_given?
 
-      fseg.each_list do |list_name, list|
-        yield list_name, list
-      end
+      fseg.each_list(&block)
     end
 
     # Iterate through all frag pages in a given fseg.
@@ -145,7 +145,7 @@ module Innodb
     def each_page_from(page)
       return enum_for(:each_page_from, page) unless block_given?
 
-      while page && page.type == :INDEX
+      while page.is_a?(Innodb::Page::Index)
         yield page
         break unless page.next
 
@@ -155,20 +155,18 @@ module Innodb
 
     # Iterate through all pages at the given level by finding the first page
     # and following the next pointers in each page.
-    def each_page_at_level(level)
+    def each_page_at_level(level, &block)
       return enum_for(:each_page_at_level, level) unless block_given?
 
-      each_page_from(min_page_at_level(level)) { |page| yield page }
+      each_page_from(min_page_at_level(level), &block)
     end
 
     # Iterate through all records on all leaf pages in ascending order.
-    def each_record
+    def each_record(&block)
       return enum_for(:each_record) unless block_given?
 
       each_page_at_level(0) do |page|
-        page.each_record do |record|
-          yield record
-        end
+        page.each_record(&block)
       end
     end
 
@@ -183,10 +181,10 @@ module Innodb
       page = @root
 
       if Innodb.debug?
-        puts 'linear_search: root=%i, level=%i, key=(%s)' % [
+        puts "linear_search: root=%i, level=%i, key=(%s)" % [
           page.offset,
           page.level,
-          key.join(', '),
+          key.join(", "),
         ]
       end
 
@@ -215,10 +213,10 @@ module Innodb
       page = @root
 
       if Innodb.debug?
-        puts 'binary_search: root=%i, level=%i, key=(%s)' % [
+        puts "binary_search: root=%i, level=%i, key=(%s)" % [
           page.offset,
           page.level,
-          key.join(', '),
+          key.join(", "),
         ]
       end
 
@@ -291,8 +289,8 @@ module Innodb
 
       # Move the cursor to a new starting position in a given page.
       def move_cursor(page, record)
-        raise 'Failed to load page' unless (@page = @index.page(page))
-        raise 'Failed to position cursor' unless (@page_cursor = @page.record_cursor(record, @direction))
+        raise "Failed to load page" unless (@page = @index.page(page))
+        raise "Failed to position cursor" unless (@page_cursor = @page.record_cursor(record, @direction))
       end
 
       # Move to the next record in the forward direction and return it.

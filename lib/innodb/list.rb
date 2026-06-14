@@ -6,8 +6,18 @@
 
 module Innodb
   class List
-    BaseNode = Struct.new(:length, :first, :last, keyword_init: true)
-    Node = Struct.new(:prev, :next, keyword_init: true)
+    BaseNode = Struct.new(
+      :length, # rubocop:disable Lint/StructNewOverride
+      :first, # rubocop:disable Lint/StructNewOverride
+      :last,
+      keyword_init: true
+    )
+
+    Node = Struct.new(
+      :prev,
+      :next,
+      keyword_init: true
+    )
 
     # An "address", which consists of a page number and byte offset within the
     # page. This points to the list "node" pointers (prev and next) of the
@@ -18,8 +28,8 @@ module Innodb
     # or "NULL" pointer (the page number is UINT32_MAX), or the address if
     # valid.
     def self.get_address(cursor)
-      page = cursor.name('page') { Innodb::Page.maybe_undefined(cursor.read_uint32) }
-      offset = cursor.name('offset') { cursor.read_uint16 }
+      page = cursor.name("page") { Innodb::Page.maybe_undefined(cursor.read_uint32) }
+      offset = cursor.name("offset") { cursor.read_uint16 }
 
       Innodb::Page::Address.new(page: page, offset: offset) if page
     end
@@ -33,8 +43,8 @@ module Innodb
     # linked list.
     def self.get_node(cursor)
       Node.new(
-        prev: cursor.name('prev') { get_address(cursor) },
-        next: cursor.name('next') { get_address(cursor) }
+        prev: cursor.name("prev") { get_address(cursor) },
+        next: cursor.name("next") { get_address(cursor) }
       )
     end
 
@@ -49,9 +59,9 @@ module Innodb
     # address.
     def self.get_base_node(cursor)
       BaseNode.new(
-        length: cursor.name('length') { cursor.read_uint32 },
-        first: cursor.name('first') { get_address(cursor) },
-        last: cursor.name('last') { get_address(cursor) }
+        length: cursor.name("length") { cursor.read_uint32 },
+        first: cursor.name("first") { get_address(cursor) },
+        last: cursor.name("last") { get_address(cursor) }
       )
     end
 
@@ -90,6 +100,11 @@ module Innodb
       @base.length
     end
 
+    # Is the list currently empty?
+    def empty?
+      length.zero?
+    end
+
     # Return the first object in the list using the list base node "first"
     # address pointer.
     def first
@@ -116,12 +131,10 @@ module Innodb
     end
 
     # Iterate through all nodes in the list.
-    def each
+    def each(&block)
       return enum_for(:each) unless block_given?
 
-      list_cursor.each_node do |node|
-        yield node
-      end
+      list_cursor.each_node(&block)
     end
 
     # A list iteration cursor used primarily by the Innodb::List #cursor method

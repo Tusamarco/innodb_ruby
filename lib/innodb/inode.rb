@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require 'forwardable'
+require "forwardable"
 
 module Innodb
   class Inode
@@ -55,13 +55,13 @@ module Innodb
         space,
         Header.new(
           offset: cursor.position,
-          fseg_id: cursor.name('fseg_id') { cursor.read_uint64 },
-          not_full_n_used: cursor.name('not_full_n_used') { cursor.read_uint32 },
-          free: cursor.name('list[free]') { Innodb::List::Xdes.new(space, Innodb::List.get_base_node(cursor)) },
-          not_full: cursor.name('list[not_full]') { Innodb::List::Xdes.new(space, Innodb::List.get_base_node(cursor)) },
-          full: cursor.name('list[full]') { Innodb::List::Xdes.new(space, Innodb::List.get_base_node(cursor)) },
-          magic_n: cursor.name('magic_n') { cursor.read_uint32 },
-          frag_array: cursor.name('frag_array') { page_number_array(FRAG_ARRAY_N_SLOTS, cursor) }
+          fseg_id: cursor.name("fseg_id") { cursor.read_uint64 },
+          not_full_n_used: cursor.name("not_full_n_used") { cursor.read_uint32 },
+          free: cursor.name("list[free]") { Innodb::List::Xdes.new(space, Innodb::List.get_base_node(cursor)) },
+          not_full: cursor.name("list[not_full]") { Innodb::List::Xdes.new(space, Innodb::List.get_base_node(cursor)) },
+          full: cursor.name("list[full]") { Innodb::List::Xdes.new(space, Innodb::List.get_base_node(cursor)) },
+          magic_n: cursor.name("magic_n") { cursor.read_uint32 },
+          frag_array: cursor.name("frag_array") { page_number_array(FRAG_ARRAY_N_SLOTS, cursor) }
         )
       )
     end
@@ -84,7 +84,7 @@ module Innodb
     def_delegator :header, :frag_array
 
     def inspect
-      '<%s space=%s, fseg=%i>' % [
+      "<%s space=%s, fseg=%i>" % [
         self.class.name,
         space.inspect,
         fseg_id,
@@ -99,7 +99,7 @@ module Innodb
 
     # Helper method to return an array of only non-nil fragment pages.
     def frag_array_pages
-      frag_array.reject(&:nil?)
+      frag_array.compact
     end
 
     # Helper method to count non-nil fragment pages.
@@ -147,18 +147,14 @@ module Innodb
     # Iterate through the fragment array followed by all lists, yielding the
     # page number. This allows a convenient way to identify all pages that are
     # part of this inode.
-    def each_page_number
+    def each_page_number(&block)
       return enum_for(:each_page_number) unless block_given?
 
-      frag_array_pages.each do |page_number|
-        yield page_number
-      end
+      frag_array_pages.each(&block)
 
       each_list do |_fseg_name, fseg_list|
         fseg_list.each do |xdes|
-          xdes.each_page_status do |page_number|
-            yield page_number
-          end
+          xdes.each_page_status(&block)
         end
       end
 

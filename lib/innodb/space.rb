@@ -48,16 +48,13 @@ module Innodb
       end
 
       def name
-        prefix = ''
-        prefix = File.basename(File.dirname(file.path)) + '/' if File.extname(file.path) == '.ibd'
-
-        prefix + File.basename(file.path)
+        file.path
       end
     end
 
     # Open a space file, optionally providing the page size to use. Pages
     # that aren't 16 KiB may not be supported well.
-    def initialize(filenames)
+    def initialize(filenames, innodb_system: nil)
       filenames = [filenames] unless filenames.is_a?(Array)
 
       @data_files = []
@@ -73,7 +70,7 @@ module Innodb
       @compressed       = fsp_flags.compressed
 
       @pages = (@size / @page_size)
-      @innodb_system = nil
+      @innodb_system = innodb_system
       @record_describer = nil
     end
 
@@ -100,11 +97,11 @@ module Innodb
     # to do anything which could instantiate a BufferCursor so that we can use
     # this method in cursor initialization.
     def name
-      @name ||= @data_files.map(&:name).join(',')
+      @name ||= @data_files.map(&:name).join(",")
     end
 
     def inspect
-      '<%s file=%s, page_size=%i, pages=%i>' % [
+      "<%s file=%s, page_size=%i, pages=%i>" % [
         self.class.name,
         name.inspect,
         page_size,
@@ -121,7 +118,7 @@ module Innodb
       page_offset = BinData::Uint32be.read(read_at_offset(4, 4)).to_i
       page_type   = BinData::Uint16be.read(read_at_offset(24, 2)).to_i
       unless page_offset.zero? && Innodb::Page::PAGE_TYPE_BY_VALUE[page_type] == :FSP_HDR
-        raise 'Something is very wrong; Page 0 does not seem to be type FSP_HDR; got page type %i but expected %i' % [
+        raise "Something is very wrong; Page 0 does not seem to be type FSP_HDR; got page type %i but expected %i" % [
           page_type,
           Innodb::Page::PAGE_TYPE[:FSP_HDR][:value],
         ]
@@ -132,7 +129,7 @@ module Innodb
       fil_space = BinData::Uint32be.read(read_at_offset(34, 4)).to_i
       fsp_space = BinData::Uint32be.read(read_at_offset(38, 4)).to_i
       unless fil_space == fsp_space
-        raise 'Something is very wrong; FIL and FSP header Space IDs do not match: FIL is %i but FSP is %i' % [
+        raise "Something is very wrong; FIL and FSP header Space IDs do not match: FIL is %i but FSP is %i" % [
           fil_space,
           fsp_space,
         ]
@@ -276,6 +273,12 @@ module Innodb
       fsp[:space_id]
     end
 
+    def checked_page_class!(page, expected_class)
+      return page if page.instance_of?(expected_class)
+
+      raise "Page #{page.offset} is not the correct type, found: #{page.class}, expected: #{expected_class}"
+    end
+
     # Return the page number for the space's TRX_SYS page.
     def page_trx_sys
       5
@@ -283,13 +286,15 @@ module Innodb
 
     # Get the Innodb::Page::TrxSys page for a system space.
     def trx_sys
-      page(page_trx_sys) if system_space?
+      raise "Transaction System is only available in system spaces" unless system_space?
+
+      checked_page_class!(page(page_trx_sys), Innodb::Page::TrxSys)
     end
 
     def rseg_page?(page_number)
       return false unless trx_sys
 
-      !trx_sys.rsegs.select { |rseg| rseg.space_id.zero? && rseg.page_number == page_number }.empty?
+      trx_sys.rsegs.any? { |rseg| rseg.space_id.zero? && rseg.page_number == page_number }
     end
 
     # Return the page number for the space's SYS data dictionary header.
@@ -299,12 +304,22 @@ module Innodb
 
     # Get the Innodb::Page::SysDataDictionaryHeader page for a system space.
     def data_dictionary_page
-      page(page_sys_data_dictionary) if system_space?
+      raise "Data Dictionary is only available in system spaces" unless system_space?
+
+      checked_page_class!(page(page_sys_data_dictionary), Innodb::Page::SysDataDictionaryHeader)
     end
 
     # Get an Innodb::List object for a specific list by list name.
     def list(name)
       fsp[name] if XDES_LISTS.include?(name) || INODE_LISTS.include?(name)
+    end
+
+    def sdi
+      @sdi ||= Innodb::Sdi.new(self)
+    end
+
+    def sdi?
+      sdi.valid?
     end
 
     # Get an Innodb::Index object for a specific index by root page number.
@@ -316,10 +331,14 @@ module Innodb
     def each_index_root_page_number
       return enum_for(:each_index_root_page_number) unless block_given?
 
-      if innodb_system
+      if innodb_system&.data_dictionary&.populated?
         # Retrieve the index root page numbers from the data dictionary.
-        innodb_system.data_dictionary.each_index_by_space_id(space_id) do |record|
-          yield record['PAGE_NO']
+        # TODO: An efficient way to handle this?
+        tablespace = innodb_system.data_dictionary.tablespaces.find(innodb_space_id: space_id)
+        innodb_system.data_dictionary.tables.each do |table|
+          table.indexes.by(tablespace: tablespace).each do |index|
+            yield index.root_page_number
+          end
         end
       else
         # Guess that the index root pages will be present starting at page 3,
@@ -327,7 +346,7 @@ module Innodb
         # for IBD files, if they haven't added indexes online.
         (3...@pages).each do |page_number|
           page = page(page_number)
-          yield page_number if page.type == :INDEX && page.root?
+          yield page_number if page.is_a?(Innodb::Page::Index) && page.root?
         end
       end
 
@@ -355,14 +374,12 @@ module Innodb
     end
 
     # Iterate through Innodb::Inode objects in the space.
-    def each_inode
+    def each_inode(&block)
       return enum_for(:each_inode) unless block_given?
 
-      each_inode_list.each do |_name, list|
+      each_inode_list do |_name, list|
         list.each do |page|
-          page.each_allocated_inode do |inode|
-            yield inode
-          end
+          page.each_allocated_inode(&block)
         end
       end
     end
@@ -374,14 +391,12 @@ module Innodb
     end
 
     # Iterate through the page numbers in the doublewrite buffer.
-    def each_doublewrite_page_number
+    def each_doublewrite_page_number(&block)
       return nil unless system_space?
       return enum_for(:each_doublewrite_page_number) unless block_given?
 
       trx_sys.doublewrite[:page_info][0][:page_number].each do |start_page|
-        (start_page...(start_page + pages_per_extent)).each do |page_number|
-          yield page_number
-        end
+        (start_page...(start_page + pages_per_extent)).each(&block)
       end
     end
 
@@ -414,12 +429,10 @@ module Innodb
     end
 
     # An array of all FSP/XDES page numbers for the space.
-    def each_xdes_page_number
+    def each_xdes_page_number(&block)
       return enum_for(:each_xdes_page_number) unless block_given?
 
-      0.step(pages - 1, pages_per_bookkeeping_page).each do |n|
-        yield n
-      end
+      0.step(pages - 1, pages_per_bookkeeping_page).each(&block)
     end
 
     # Iterate through all extent descriptor pages, returning an Innodb::Page object
@@ -450,7 +463,7 @@ module Innodb
     # Iterate through all pages, yielding the page number, page object,
     # and page status.
     def each_page_status(start_page = 0)
-      return enum_for(:each_page_with_status, start_page) unless block_given?
+      return enum_for(:each_page_status, start_page) unless block_given?
 
       each_xdes do |xdes|
         xdes.each_page_status do |page_number, page_status|

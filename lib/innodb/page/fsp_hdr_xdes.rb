@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-require 'innodb/list'
-require 'innodb/xdes'
+require "innodb/list"
+require "innodb/xdes"
 
 # A specialized class for FSP_HDR (filespace header) and XDES (extent
 # descriptor) page types. Each tablespace always has an FSP_HDR page as
@@ -34,7 +34,7 @@ module Innodb
       Header = Struct.new(
         :space_id,
         :unused,
-        :size,
+        :size, # rubocop:disable Lint/StructNewOverride
         :free_limit,
         :flags,
         :frag_n_used,
@@ -44,6 +44,22 @@ module Innodb
         :first_unused_seg,
         :full_inodes,
         :free_inodes,
+        keyword_init: true
+      )
+
+      EncryptionHeader = Struct.new(
+        :magic,
+        :master_key_id,
+        :key,
+        :iv,
+        :server_uuid,
+        :checksum,
+        keyword_init: true
+      )
+
+      SdiHeader = Struct.new(
+        :version,
+        :root_page_number,
         keyword_init: true
       )
 
@@ -118,23 +134,39 @@ module Innodb
         entries_in_xdes_array * size_xdes_entry
       end
 
+      def pos_encryption_header
+        pos_xdes_array + size_xdes_array
+      end
+
+      def size_encryption_header
+        3 + 4 + (32 * 2) + 36 + 4 + 4
+      end
+
+      def pos_sdi_header
+        pos_encryption_header + size_encryption_header
+      end
+
+      def size_sdi_header
+        8
+      end
+
       # Read the FSP (filespace) header, which contains a few counters and flags,
       # as well as list base nodes for each list maintained in the filespace.
       def fsp_header
-        @fsp_header ||= cursor(pos_fsp_header).name('fsp') do |c|
+        @fsp_header ||= cursor(pos_fsp_header).name("fsp") do |c|
           Header.new(
-            space_id: c.name('space_id') { c.read_uint32 },
-            unused: c.name('unused') { c.read_uint32 },
-            size: c.name('size') { c.read_uint32 },
-            free_limit: c.name('free_limit') { c.read_uint32 },
-            flags: c.name('flags') { self.class.decode_flags(c.read_uint32) },
-            frag_n_used: c.name('frag_n_used') { c.read_uint32 },
-            free: c.name('list[free]') { Innodb::List::Xdes.new(@space, Innodb::List.get_base_node(c)) },
-            free_frag: c.name('list[free_frag]') { Innodb::List::Xdes.new(@space, Innodb::List.get_base_node(c)) },
-            full_frag: c.name('list[full_frag]') { Innodb::List::Xdes.new(@space, Innodb::List.get_base_node(c)) },
-            first_unused_seg: c.name('first_unused_seg') { c.read_uint64 },
-            full_inodes: c.name('list[full_inodes]') { Innodb::List::Inode.new(@space, Innodb::List.get_base_node(c)) },
-            free_inodes: c.name('list[free_inodes]') { Innodb::List::Inode.new(@space, Innodb::List.get_base_node(c)) }
+            space_id: c.name("space_id") { c.read_uint32 },
+            unused: c.name("unused") { c.read_uint32 },
+            size: c.name("size") { c.read_uint32 },
+            free_limit: c.name("free_limit") { c.read_uint32 },
+            flags: c.name("flags") { self.class.decode_flags(c.read_uint32) },
+            frag_n_used: c.name("frag_n_used") { c.read_uint32 },
+            free: c.name("list[free]") { Innodb::List::Xdes.new(@space, Innodb::List.get_base_node(c)) },
+            free_frag: c.name("list[free_frag]") { Innodb::List::Xdes.new(@space, Innodb::List.get_base_node(c)) },
+            full_frag: c.name("list[full_frag]") { Innodb::List::Xdes.new(@space, Innodb::List.get_base_node(c)) },
+            first_unused_seg: c.name("first_unused_seg") { c.read_uint64 },
+            full_inodes: c.name("list[full_inodes]") { Innodb::List::Inode.new(@space, Innodb::List.get_base_node(c)) },
+            free_inodes: c.name("list[free_inodes]") { Innodb::List::Inode.new(@space, Innodb::List.get_base_node(c)) }
           )
         end
       end
@@ -155,36 +187,70 @@ module Innodb
       def each_xdes
         return enum_for(:each_xdes) unless block_given?
 
-        cursor(pos_xdes_array).name('xdes_array') do |c|
+        cursor(pos_xdes_array).name("xdes_array") do |c|
           entries_in_xdes_array.times do
             yield Innodb::Xdes.new(self, c)
           end
         end
       end
 
-      def each_region
+      def encryption_header
+        @encryption_header ||= cursor(pos_encryption_header).name("encryption_header") do |c|
+          EncryptionHeader.new(
+            magic: c.name("magic") { c.read_bytes(3) },
+            master_key_id: c.name("master_key_id") { c.read_uint32 },
+            key: c.name("key") { c.read_bytes(32) },
+            iv: c.name("iv") { c.read_bytes(32) },
+            server_uuid: c.name("server_uuid") { c.read_string(36) },
+            checksum: c.name("checksum") { c.read_uint32 }
+          )
+        end
+      end
+
+      def sdi_header
+        @sdi_header ||= cursor(pos_sdi_header).name("sdi_header") do |c|
+          SdiHeader.new(
+            version: c.name("version") { c.read_uint32 },
+            root_page_number: c.name("root_page_number") { c.read_uint32 }
+          )
+        end
+      end
+
+      def each_region(&block)
         return enum_for(:each_region) unless block_given?
 
-        super do |region|
-          yield region
-        end
+        super
 
         yield Region.new(
           offset: pos_fsp_header,
           length: size_fsp_header,
           name: :fsp_header,
-          info: 'FSP Header'
+          info: "FSP Header"
         )
 
         each_xdes do |xdes|
-          state = xdes.state || 'unused'
+          state = xdes.state || "unused"
           yield Region.new(
             offset: xdes.offset,
             length: size_xdes_entry,
-            name: "xdes_#{state}".to_sym,
+            name: :"xdes_#{state}",
             info: "Extent Descriptor (#{state})"
           )
         end
+
+        yield Region.new(
+          offset: pos_encryption_header,
+          length: size_encryption_header,
+          name: :encryption_header,
+          info: "Encryption Header"
+        )
+
+        yield Region.new(
+          offset: pos_sdi_header,
+          length: size_sdi_header,
+          name: :sdi_header,
+          info: "SDI Header"
+        )
 
         nil
       end
@@ -193,14 +259,22 @@ module Innodb
       def dump
         super
 
-        puts 'fsp header:'
+        puts "fsp header:"
         pp fsp_header
         puts
 
-        puts 'xdes entries:'
+        puts "xdes entries:"
         each_xdes do |xdes|
           pp xdes
         end
+        puts
+
+        puts "encryption header:"
+        pp encryption_header
+        puts
+
+        puts "serialized dictionary information header:"
+        pp sdi_header
         puts
       end
     end

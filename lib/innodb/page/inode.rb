@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require 'innodb/list'
+require "innodb/list"
 
 # A specialized class for handling INODE pages, which contain index FSEG (file
 # segment) information. This allows all extents and individual pages assigned
@@ -38,7 +38,7 @@ module Innodb
 
       # Return the list entry.
       def list_entry
-        cursor(pos_list_entry).name('list') { |c| Innodb::List.get_node(c) }
+        cursor(pos_list_entry).name("list") { |c| Innodb::List.get_node(c) }
       end
 
       # Return the "previous" address pointer from the list entry. This is used
@@ -80,18 +80,16 @@ module Innodb
         end
       end
 
-      def each_region
+      def each_region(&block)
         return enum_for(:each_region) unless block_given?
 
-        super do |region|
-          yield region
-        end
+        super
 
         yield Region.new(
           offset: pos_list_entry,
           length: size_list_entry,
           name: :list_entry,
-          info: 'Inode List Entry'
+          info: "Inode List Entry"
         )
 
         each_inode do |inode|
@@ -100,14 +98,14 @@ module Innodb
               offset: inode.offset,
               length: Innodb::Inode::SIZE,
               name: :inode_used,
-              info: 'Inode (used)'
+              info: "Inode (used)"
             )
           else
             yield Region.new(
               offset: inode.offset,
               length: Innodb::Inode::SIZE,
               name: :inode_free,
-              info: 'Inode (free)'
+              info: "Inode (free)"
             )
           end
         end
@@ -119,11 +117,11 @@ module Innodb
       def dump
         super
 
-        puts 'list entry:'
+        puts "list entry:"
         pp list_entry
         puts
 
-        puts 'inodes:'
+        puts "inodes:"
         each_inode(&:dump)
         puts
       end
